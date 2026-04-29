@@ -8,8 +8,11 @@ These hook scripts make MemPalace save automatically. No manual "save" commands 
 |------|--------------|-------------|
 | **Save Hook** | Every 15 human messages | Blocks the AI, tells it to save key topics/decisions/quotes to the palace |
 | **PreCompact Hook** | Right before context compaction | Emergency save — forces the AI to save EVERYTHING before losing context |
+| **Raw Journal Hook** | Every Stop hook | Cheaply mirrors the raw JSONL transcript into a local append-only archive |
 
 The AI does the actual filing — it knows the conversation context, so it classifies memories into the right wings/halls/closets. The hooks just tell it WHEN to save.
+
+For maximum safety and minimum lag, use the **Raw Journal Hook** as the hot-path layer and run mining asynchronously later. That gives you crash-safe raw capture without forcing the model to stop and organize memory every few messages.
 
 ## Install — Claude Code
 
@@ -61,6 +64,18 @@ Add to `.codex/hooks.json`:
 }
 ```
 
+To enable cheap raw transcript mirroring on every Stop:
+
+```json
+{
+  "Stop": [{
+    "type": "command",
+    "command": "/absolute/path/to/hooks/mempal_raw_journal_hook.sh",
+    "timeout": 10
+  }]
+}
+```
+
 ## Configuration
 
 Edit `mempal_save_hook.sh` to change:
@@ -68,6 +83,12 @@ Edit `mempal_save_hook.sh` to change:
 - **`SAVE_INTERVAL=15`** — How many human messages between saves. Lower = more frequent saves, higher = less interruption.
 - **`STATE_DIR`** — Where hook state is stored (defaults to `~/.mempalace/hook_state/`)
 - **`MEMPAL_DIR`** — Optional. Set to a conversations directory to auto-run `mempalace mine <dir>` on each save trigger. Leave blank (default) to let the AI handle saving via the block reason message.
+
+For `mempal_raw_journal_hook.sh`:
+
+- **`PALACE_PATH` / `MEMPALACE_PALACE_PATH`** — Optional override for where the palace lives
+- **`RAW_ARCHIVE_DIR`** — Where mirrored raw session JSONL files are stored. By default this now resolves to `<palace_path>/raw_sessions/`, so the raw archive lives inside MemPalace instead of beside it.
+- **`STATE_DIR`** — Stores per-session byte offsets so only new transcript bytes are copied
 
 ### mempalace CLI
 
@@ -136,3 +157,5 @@ Example output:
 ## Cost
 
 **Zero extra tokens.** The hooks are bash scripts that run locally. They don't call any API. The only "cost" is the AI spending a few seconds organizing memories at each checkpoint — and it's doing that with context it already has loaded.
+
+The **Raw Journal Hook** is cheaper still: it does no AI classification at all. It just copies newly appended transcript bytes into a local archive and returns immediately.

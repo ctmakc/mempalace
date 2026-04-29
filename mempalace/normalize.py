@@ -87,12 +87,28 @@ def _try_claude_code_jsonl(content: str) -> Optional[str]:
         msg_type = entry.get("type", "")
         message = entry.get("message", {})
         if msg_type in ("human", "user"):
+            if entry.get("toolUseResult") or entry.get("sourceToolAssistantUUID"):
+                continue
             text = _extract_content(message.get("content", ""))
             if text:
                 messages.append(("user", text))
         elif msg_type == "assistant":
             text = _extract_content(message.get("content", ""))
             if text:
+                messages.append(("assistant", text))
+        elif msg_type in ("queue-operation", "last-prompt", "attachment"):
+            continue
+
+        # Current Claude CLI JSONL format also uses type:user/assistant with
+        # message.role inside the payload.
+        elif msg_type in ("user", "assistant") and isinstance(message, dict):
+            role = message.get("role", msg_type)
+            if role == "user" and (entry.get("toolUseResult") or entry.get("sourceToolAssistantUUID")):
+                continue
+            text = _extract_content(message.get("content", ""))
+            if role in ("human", "user") and text:
+                messages.append(("user", text))
+            elif role == "assistant" and text:
                 messages.append(("assistant", text))
     if len(messages) >= 2:
         return _messages_to_transcript(messages)
@@ -273,7 +289,7 @@ def _extract_content(content) -> str:
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
+            elif isinstance(item, dict) and item.get("type") in {"text", "input_text", "output_text"}:
                 parts.append(item.get("text", ""))
         return " ".join(parts).strip()
     if isinstance(content, dict):

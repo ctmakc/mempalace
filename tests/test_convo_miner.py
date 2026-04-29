@@ -3,6 +3,7 @@ import tempfile
 import shutil
 import chromadb
 from mempalace.convo_miner import mine_convos
+from mempalace.judgment_memory import JudgmentMemoryEngine
 
 
 def test_convo_mining():
@@ -24,3 +25,44 @@ def test_convo_mining():
     assert len(results["documents"][0]) > 0
 
     shutil.rmtree(tmpdir)
+
+
+def test_convo_mining_can_generate_judgment_candidates():
+    tmpdir = tempfile.mkdtemp()
+    try:
+        with open(os.path.join(tmpdir, "strategy.txt"), "w") as f:
+            f.write(
+                """
+We decided to lead cold outreach with ROI proof and concrete case numbers rather than generic AI claims.
+Because vague promises were ignored and the concrete case angle got replies.
+
+I prefer short, direct implementation plans over long essays.
+
+The bug was that the webhook payload was empty because the proxy stripped the body.
+The fix was to read the raw request stream before parsing.
+""".strip()
+            )
+
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(
+            tmpdir,
+            palace_path,
+            wing="sales_playbook",
+            extract_mode="general",
+            enable_judgments=True,
+        )
+
+        engine = JudgmentMemoryEngine(palace_path=palace_path)
+        judgments = engine.list_judgments(limit=10, statuses=["active", "weakened", "candidate"])
+        assert judgments == []
+
+        with engine._connect_db() as conn:
+            candidate_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM judgment_candidates"
+            ).fetchone()["count"]
+            event_count = conn.execute("SELECT COUNT(*) AS count FROM events").fetchone()["count"]
+
+        assert candidate_count >= 2
+        assert event_count >= candidate_count
+    finally:
+        shutil.rmtree(tmpdir)

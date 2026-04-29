@@ -141,6 +141,11 @@ def search_memories(
                 "wing": meta.get("wing", "unknown"),
                 "room": meta.get("room", "unknown"),
                 "source_file": Path(meta.get("source_file", "?")).name,
+                "source_path": meta.get("source_file", ""),
+                "source_tool": meta.get("source_tool", ""),
+                "source_session_id": meta.get("source_session_id", ""),
+                "source_cwd": meta.get("source_cwd", ""),
+                "chunk_index": meta.get("chunk_index", 0),
                 "similarity": round(1 - dist, 3),
             }
         )

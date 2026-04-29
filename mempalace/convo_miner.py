@@ -261,6 +261,7 @@ def mine_convos(
     limit: int = 0,
     dry_run: bool = False,
     extract_mode: str = "exchange",
+    enable_judgments: bool = False,
 ):
     """Mine a directory of conversation files into the palace.
 
@@ -289,6 +290,12 @@ def mine_convos(
     print(f"{'-' * 55}\n")
 
     collection = get_collection(palace_path) if not dry_run else None
+    judgment_engine = None
+    auto_candidate_count = 0
+    if enable_judgments and not dry_run:
+        from .judgment_memory import JudgmentMemoryEngine
+
+        judgment_engine = JudgmentMemoryEngine(palace_path=palace_path)
 
     total_drawers = 0
     files_skipped = 0
@@ -375,6 +382,37 @@ def mine_convos(
                     ],
                 )
                 drawers_added += 1
+
+                if judgment_engine and extract_mode == "general":
+                    event_id = judgment_engine.ingest_event(
+                        event_type="memory_chunk_filed",
+                        actor_type="agent",
+                        source_system="mempalace_convo_miner",
+                        source_entity_type="conversation_file",
+                        source_entity_id=source_file,
+                        domain=wing,
+                        trace_id=f"{wing}:{Path(source_file).name}",
+                        payload={
+                            "wing": wing,
+                            "room": chunk_room,
+                            "source_file": source_file,
+                            "chunk_index": chunk["chunk_index"],
+                            "content": chunk["content"],
+                        },
+                        metadata={
+                            "ingest_mode": "convos",
+                            "extract_mode": extract_mode,
+                        },
+                    )
+                    candidate_id = judgment_engine.create_candidate_from_memory_chunk(
+                        chunk_text=chunk["content"],
+                        memory_type=chunk_room,
+                        source_event_ids=[event_id],
+                        domain=wing,
+                        source_trace_id=f"{wing}:{Path(source_file).name}",
+                    )
+                    if candidate_id:
+                        auto_candidate_count += 1
             except Exception as e:
                 if "already exists" not in str(e).lower():
                     raise
@@ -387,6 +425,8 @@ def mine_convos(
     print(f"  Files processed: {len(files) - files_skipped}")
     print(f"  Files skipped (already filed): {files_skipped}")
     print(f"  Drawers filed: {total_drawers}")
+    if judgment_engine:
+        print(f"  Judgment candidates created: {auto_candidate_count}")
     if room_counts:
         print("\n  By room:")
         for room, count in sorted(room_counts.items(), key=lambda x: x[1], reverse=True):

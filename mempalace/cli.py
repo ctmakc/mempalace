@@ -80,6 +80,7 @@ def cmd_mine(args):
             limit=args.limit,
             dry_run=args.dry_run,
             extract_mode=args.extract,
+            enable_judgments=args.judgments,
         )
     else:
         from .miner import mine
@@ -153,6 +154,99 @@ def cmd_status(args):
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     status(palace_path=palace_path)
+
+
+def cmd_sync_raw(args):
+    from .raw_sync import sync_raw_sessions
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    stats = sync_raw_sessions(
+        palace_path=palace_path,
+        wing=args.wing,
+        limit_files=args.limit_files,
+        mirror_only=args.mirror_only,
+    )
+    print("Raw session sync complete")
+    print("=" * 50)
+    if "source_files_seen" in stats:
+        print(f"Source files:   {stats['source_files_seen']}")
+        print(f"Source updated: {stats['source_files_updated']}")
+    print(f"Files seen:     {stats['files_seen']}")
+    print(f"Files updated:  {stats['files_updated']}")
+    print(f"Segments added: {stats['segments_added']}")
+    print(f"Raw dir:        {stats['raw_dir']}")
+
+
+def cmd_web(args):
+    import uvicorn
+    from .web_app import create_app
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    uvicorn.run(create_app(palace_path=palace_path), host=args.host, port=args.port)
+
+
+def cmd_judgments(args):
+    """Inspect or retrieve JME judgments."""
+    from .judgment_memory import JudgmentMemoryEngine
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    engine = JudgmentMemoryEngine(palace_path=palace_path)
+
+    if args.apply_decay:
+        updated = engine.apply_decay()
+        print(f"Applied decay to {updated} judgments.\n")
+
+    if args.query:
+        context = {}
+        if args.context:
+            for item in args.context:
+                key, _, value = item.partition("=")
+                if key and value:
+                    context[key] = value
+
+        package = engine.retrieve_judgments(
+            query=args.query,
+            domain=args.domain,
+            applicability_context=context or None,
+            limit=args.limit,
+        )
+        print(f'Retrieved judgments for: "{args.query}"')
+        print("=" * 60)
+        for index, entry in enumerate(package.retrieved_judgments, 1):
+            judgment = entry["judgment"]
+            print(
+                f"[{index}] score={entry['retrieval_score']:.3f} "
+                f"confidence={judgment['confidence_score']:.3f} "
+                f"status={judgment['status']}"
+            )
+            print(f"    {judgment['canonical_statement']}")
+            if judgment["applicability_conditions"]:
+                print(f"    applicability={judgment['applicability_conditions']}")
+            print()
+        if package.suppressed_judgments:
+            print("Suppressed:")
+            for item in package.suppressed_judgments[: args.limit]:
+                print(f"  - {item['canonical_statement']} ({item['reason']})")
+        return
+
+    judgments = engine.list_judgments(limit=args.limit, domain=args.domain)
+    print("Active judgments")
+    print("=" * 60)
+    if not judgments:
+        print("No judgments yet.")
+        print("Use the Python API to ingest events, create candidates, and promote them.")
+        return
+
+    for index, judgment in enumerate(judgments, 1):
+        print(
+            f"[{index}] confidence={judgment.confidence_score:.3f} "
+            f"support={judgment.support_count:.1f} contradict={judgment.contradict_count:.1f} "
+            f"status={judgment.status}"
+        )
+        print(f"    {judgment.canonical_statement}")
+        if judgment.applicability_conditions:
+            print(f"    applicability={judgment.applicability_conditions}")
+        print()
 
 
 def cmd_repair(args):
@@ -404,6 +498,11 @@ def main():
         default="exchange",
         help="Extraction strategy for convos mode: 'exchange' (default) or 'general' (5 memory types)",
     )
+    p_mine.add_argument(
+        "--judgments",
+        action="store_true",
+        help="When mining convos in general mode, also create pending judgment candidates",
+    )
 
     # search
     p_search = sub.add_parser("search", help="Find anything, exact words")
@@ -460,6 +559,44 @@ def main():
     # status
     sub.add_parser("status", help="Show what's been filed")
 
+    # sync-raw
+    p_sync_raw = sub.add_parser(
+        "sync-raw",
+        help="Incrementally ingest mirrored raw terminal sessions into searchable drawers",
+    )
+    p_sync_raw.add_argument("--wing", default="terminal_sessions", help="Wing to file raw sessions under")
+    p_sync_raw.add_argument("--limit-files", type=int, default=0, help="Limit number of raw session files to scan")
+    p_sync_raw.add_argument(
+        "--mirror-only",
+        action="store_true",
+        help="Only mirror external session JSONL files into raw_sessions; leave parsing to raw-indexer",
+    )
+
+    # web
+    p_web = sub.add_parser("web", help="Run the local MemPalace dashboard")
+    p_web.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    p_web.add_argument("--port", type=int, default=8765, help="Port to bind")
+
+    # judgments
+    p_judgments = sub.add_parser(
+        "judgments",
+        help="Inspect or retrieve structured judgments from the JME layer",
+    )
+    p_judgments.add_argument("--query", default=None, help="Semantic query for decision context")
+    p_judgments.add_argument("--domain", default=None, help="Limit to one domain")
+    p_judgments.add_argument(
+        "--context",
+        action="append",
+        default=[],
+        help="Applicability context as key=value; repeat as needed",
+    )
+    p_judgments.add_argument("--limit", type=int, default=5, help="Number of results")
+    p_judgments.add_argument(
+        "--apply-decay",
+        action="store_true",
+        help="Apply time-based decay before listing or retrieval",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -475,6 +612,9 @@ def main():
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "status": cmd_status,
+        "sync-raw": cmd_sync_raw,
+        "web": cmd_web,
+        "judgments": cmd_judgments,
     }
     dispatch[args.command](args)
 
